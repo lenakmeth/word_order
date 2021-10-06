@@ -127,21 +127,30 @@ def tokenize_and_pad(sentences):
         tok = CamembertTokenizer.from_pretrained(args.transformer_model)
         
     for sentence_list in sentences:
-        encoded_dict = tok.encode_plus(
-                            sentence_list[0], # the sentence                  
-                            add_special_tokens = True, # Add '[CLS]' and '[SEP]'
-                            max_length = 128,      # Pad & truncate all sentences.
-                            padding = 'max_length',
-                            truncation = True,
-                            return_attention_mask = True, # Construct attn. masks.
-                            # return_tensors = 'pt',     # Return pytorch tensors.
-                       )
-        input_ids.append(
-            encoded_dict['input_ids'])
-        attention_masks.append(encoded_dict['attention_mask'])
-        # Add segment ids, add 1 for verb idx
-        segment_id = [0] * 128   
-        segment_ids.append(segment_id)
+        try:
+            encoded_dict = tok.encode_plus(
+                                sentence_list[0], # the sentence                  
+                                add_special_tokens = True, # Add '[CLS]' and '[SEP]'
+                                max_length = 128,      # Pad & truncate all sentences.
+                                padding = 'max_length',
+                                truncation = True,
+                                return_attention_mask = True, # Construct attn. masks.
+                                # return_tensors = 'pt',     # Return pytorch tensors.
+                           )
+            
+            # Add segment ids, add 1 for verb idx
+    #         segment_idx = encoded_dict['input_ids'][1:].index(0) + 1
+            # this will only work for flaubert
+            segment_idx = sentence_list[0].split(' ').index('</s>') +1
+            segment_id = [0] * (segment_idx) + [1] * (len(encoded_dict['input_ids'])-segment_idx)
+            assert len(segment_id) == len(encoded_dict['input_ids'])
+        
+            input_ids.append(encoded_dict['input_ids'])
+            attention_masks.append(encoded_dict['attention_mask'])
+            segment_ids.append(segment_id)
+            
+        except AssertionError:
+            pass
 
     return input_ids, attention_masks, segment_ids
 
