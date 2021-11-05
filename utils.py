@@ -95,7 +95,7 @@ def read_sents(path):
             next(f)
             for line in f:
                 l = line.strip().split('\t')
-                sentences.append(l[:-1])
+                sentences.append(l)
                 if l[-1] == 'before':
                     labels.append(0)
                 else: # after
@@ -109,6 +109,32 @@ def read_sents(path):
 
     return train_sentences, train_labels, val_sentences, val_labels, test_sentences, test_labels
 
+def read_sents_rg(path):
+    """ Read the .tsv files with the annotated sentences. 
+        File format: sent_id, sentence, verb, verb_idx, label"""
+
+    def open_file(file):
+        sentences = []
+        labels = []
+        
+        with open(file, 'r', encoding='utf-8') as f:
+            next(f)
+            for line in f:
+                l = line.strip().split('\t')
+                if l[-1] == 'before':
+                    labels.append(0)
+                else:
+                    labels.append(1)
+                sentences.append([l[0]+' </s> '+l[1]] + l[2:])
+
+            return sentences, labels
+        
+    train_sentences, train_labels = open_file(path + '/train.tsv')    
+    val_sentences, val_labels = open_file(path + '/val.tsv')
+    test_sentences, test_labels = open_file(path + '/test.tsv')
+#     test_sentences, test_labels = open_file(path + '/test_balanced.tsv')
+
+    return train_sentences, train_labels, val_sentences, val_labels, test_sentences, test_labels
             
 
 def tokenize_and_pad(sentences):
@@ -119,6 +145,7 @@ def tokenize_and_pad(sentences):
     input_ids = []
     segment_ids = [] # token type ids
     attention_masks = []
+    labels = []
     
     if 'flaubert' in args.transformer_model:
         # Tokenize all of the sentences and map the tokens to their word IDs.
@@ -141,18 +168,84 @@ def tokenize_and_pad(sentences):
             # Add segment ids, add 1 for verb idx
     #         segment_idx = encoded_dict['input_ids'][1:].index(0) + 1
             # this will only work for flaubert
-            segment_idx = sentence_list[0].split(' ').index('</s>') +1
-            segment_id = [0] * (segment_idx) + [1] * (len(encoded_dict['input_ids'])-segment_idx)
-            assert len(segment_id) == len(encoded_dict['input_ids'])
+#             segment_idx = sentence_list[0].split(' ').index('</s>') +1
+#             segment_id = [0] * (segment_idx) + [1] * (len(encoded_dict['input_ids'])-segment_idx)
+#             assert len(segment_id) == len(encoded_dict['input_ids'])
         
             input_ids.append(encoded_dict['input_ids'])
             attention_masks.append(encoded_dict['attention_mask'])
-            segment_ids.append(segment_id)
+#             segment_ids.append(segment_id)
+            segment_ids.append([0]*len(encoded_dict['input_ids']))
+            
+            if sentence_list[-1] == 'before':
+                labels.append(0)
+            elif sentence_list[-1] == 'after':
+                labels.append(1)
+            
+        except AssertionError:
+            print(sentence_list)
+            pass
+
+    return input_ids, attention_masks, segment_ids, labels
+
+
+def tokenize_and_pad_with_attn(sentences):
+    """ We are using .encode_plus. This does not make specialized attn masks 
+        like in our selectional preferences experiment. Revert to .encode if
+        necessary."""
+    
+    input_ids = []
+    segment_ids = [] # token type ids
+    attention_masks = []
+    labels = []
+    final_sentences = []
+    
+    if 'flaubert' in args.transformer_model:
+        # Tokenize all of the sentences and map the tokens to their word IDs.
+        tok = FlaubertTokenizer.from_pretrained(args.transformer_model )
+    elif 'camembert' in args.transformer_model:
+        tok = CamembertTokenizer.from_pretrained(args.transformer_model)
+    
+    for sentence_list in sentences:
+        try:
+            noun = sentence_list[2]
+            adj = sentence_list[1]
+            
+            tok_noun = tok.encode(noun)
+            tok_adj = tok.encode(adj)
+            
+            if len(tok_noun) == 3 and len(tok_adj) == 3:
+                encoded_dict = tok.encode_plus(
+                                    sentence_list[0], # the sentence                  
+                                    add_special_tokens = True, # Add '[CLS]' and '[SEP]'
+                                    max_length = 128,      # Pad & truncate all sentences.
+                                    padding = 'max_length',
+                                    truncation = True,
+                                    return_attention_mask = True, # Construct attn. masks.
+                                    # return_tensors = 'pt',     # Return pytorch tensors.
+                               )
+                if tok_noun[1] in encoded_dict['input_ids'] and \
+                    tok_adj[1] in encoded_dict['input_ids']:
+                    
+                    attn_mask = [0] * len(encoded_dict['input_ids'])
+                    attn_mask[encoded_dict['input_ids'].index(tok_noun[1])] = 1
+                    attn_mask[encoded_dict['input_ids'].index(tok_adj[1])] = 1
+                    assert len(encoded_dict['input_ids']) == len(attn_mask)
+                    
+                    input_ids.append(encoded_dict['input_ids'])
+                    segment_ids.append([0] * len(encoded_dict['input_ids']))
+                    attention_masks.append(attn_mask)
+                    final_sentences.append(sentence_list[:3])
+
+                    if sentence_list[-1] == 'before':
+                        labels.append(0)
+                    elif sentence_list[-1] == 'after':
+                        labels.append(1)
             
         except AssertionError:
             pass
 
-    return input_ids, attention_masks, segment_ids
+    return input_ids, attention_masks, segment_ids, labels, final_sentences
 
 
 def flat_accuracy(labels, preds):

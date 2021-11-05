@@ -14,34 +14,8 @@ import time
 
 args = parse_args()
 
-logger = open('logs/' + args.data_path + '/' + args.transformer_model.split('/')[-1] + '.log', 'a+')
+logger = open('logs/' + args.data_path + '/test_regular/' + args.transformer_model.split('/')[-1] + '.log', 'a+')
 logger.write('\nModel: ' + args.transformer_model)
-
-def read_sents_rg(path):
-    """ Read the .tsv files with the annotated sentences. 
-        File format: sent_id, sentence, verb, verb_idx, label"""
-
-    def open_file(file):
-        sentences = []
-        labels = []
-        
-        with open(file, 'r', encoding='utf-8') as f:
-            next(f)
-            for line in f:
-                l = line.strip().split('\t')
-                if l[-1] == 'before':
-                    labels.append(0)
-                else:
-                    labels.append(1)
-                sentences.append([l[0]+' <cls> '+l[1]] + l[2:])
-
-            return sentences, labels
-        
-    train_sentences, train_labels = open_file(path + '/train.tsv')    
-    val_sentences, val_labels = open_file(path + '/val.tsv')
-    test_sentences, test_labels = open_file(path + '/test.tsv')
-
-    return train_sentences, train_labels, val_sentences, val_labels, test_sentences, test_labels
 
 
 device = torch.device("cpu")
@@ -56,9 +30,10 @@ train_sentences, train_labels, val_sentences, val_labels, \
 
 # make input ids, attention masks, segment ids, depending on the model we will use
 
-train_inputs, train_masks, train_segments = tokenize_and_pad(train_sentences)
-val_inputs, val_masks, val_segments = tokenize_and_pad(val_sentences)
-test_inputs, test_masks, test_segments = tokenize_and_pad(test_sentences)
+train_inputs, train_masks, train_segments, train_labels = tokenize_and_pad(train_sentences)
+val_inputs, val_masks, val_segments, val_labels = tokenize_and_pad(val_sentences)
+test_inputs, test_masks, test_segments, test_labels = tokenize_and_pad(test_sentences)
+# print(len(test_inputs), len(test_masks), len(test_labels))
 print('\n\nLoaded sentences and converted.')
 
 
@@ -213,6 +188,7 @@ for epoch_i in range(0, epochs):
 
         outputs = model(b_input_ids, 
                         token_type_ids=b_segments, 
+#                         token_type_ids = None,
                         attention_mask=b_input_mask, 
                         labels=b_labels)
         
@@ -267,6 +243,7 @@ for epoch_i in range(0, epochs):
 
             outputs = model(b_input_ids, 
                             token_type_ids=b_segments, 
+#                             token_type_ids = None,
                             attention_mask=b_input_mask
                                )
         
@@ -339,8 +316,9 @@ for batch in test_dataloader:
     with torch.no_grad():        
 
          outputs = model(b_input_ids, 
-                            token_type_ids=b_segments, 
-                            attention_mask=b_input_mask)
+                        token_type_ids=b_segments, 
+#                         token_type_ids = None,
+                        attention_mask=b_input_mask)
 
     logits = outputs[0]
     logits = logits.detach().cpu().numpy()
