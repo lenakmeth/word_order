@@ -82,17 +82,12 @@ def format_line(raw_line):
 
     return output
 
-
-def read_sents(path):
-    """ Read the .tsv files with the annotated sentences. 
-        File format: sent_id, sentence, verb, verb_idx, label"""
-
-    def open_file(file):
+def open_file(path, file):
         sentences = []
         labels = []
         
-        with open(file, 'r', encoding='utf-8') as f:
-            next(f)
+        with open(path + '/' + file, 'r', encoding='utf-8') as f:
+#             next(f)
             for line in f:
                 l = line.strip().split('\t')
                 sentences.append(l)
@@ -101,37 +96,39 @@ def read_sents(path):
                 else: # after
                     labels.append(1)
                 
-            return sentences,labels
+            return sentences, labels
+
+def read_sents(path):
+    """ Read the .tsv files with the annotated sentences. 
+        File format: sent_id, sentence, verb, verb_idx, label"""
         
-    train_sentences, train_labels = open_file(path + '/train.tsv')    
-    val_sentences, val_labels = open_file(path + '/val.tsv')
-    test_sentences, test_labels = open_file(path + '/test.tsv')
+    train_sentences, train_labels = open_file(path , 'train.tsv')    
+    val_sentences, val_labels = open_file(path , 'dev.tsv')
+    test_sentences, test_labels = open_file(path , 'test.tsv')
 
     return train_sentences, train_labels, val_sentences, val_labels, test_sentences, test_labels
 
+def open_file_rg(path, file):
+    sentences = []
+    labels = []
+    with open(path + '/' + file, 'r', encoding='utf-8') as f:
+        for line in f:
+            l = line.strip().split('\t')
+            if l[-1] == 'before':
+                labels.append(0)
+            else:
+                labels.append(1)
+            sentences.append([l[0]+' </s> '+l[1]] + l[2:])
+
+        return sentences, labels
+        
 def read_sents_rg(path):
     """ Read the .tsv files with the annotated sentences. 
         File format: sent_id, sentence, verb, verb_idx, label"""
 
-    def open_file(file):
-        sentences = []
-        labels = []
-        
-        with open(file, 'r', encoding='utf-8') as f:
-            next(f)
-            for line in f:
-                l = line.strip().split('\t')
-                if l[-1] == 'before':
-                    labels.append(0)
-                else:
-                    labels.append(1)
-                sentences.append([l[0]+' </s> '+l[1]] + l[2:])
-
-            return sentences, labels
-        
-    train_sentences, train_labels = open_file(path + '/train.tsv')    
-    val_sentences, val_labels = open_file(path + '/val.tsv')
-    test_sentences, test_labels = open_file(path + '/test.tsv')
+    train_sentences, train_labels = open_file_rg(path, 'train.tsv')    
+    val_sentences, val_labels = open_file_rg(path, 'val.tsv')
+    test_sentences, test_labels = open_file_rg(path, 'test.tsv')
 #     test_sentences, test_labels = open_file(path + '/test_balanced.tsv')
 
     return train_sentences, train_labels, val_sentences, val_labels, test_sentences, test_labels
@@ -227,6 +224,66 @@ def tokenize_and_pad_with_attn(sentences):
                 if tok_noun[1] in encoded_dict['input_ids'] and \
                     tok_adj[1] in encoded_dict['input_ids']:
                     
+                    
+                    attn_mask[encoded_dict['input_ids'].index(tok_noun[1])] = 1
+                    attn_mask[encoded_dict['input_ids'].index(tok_adj[1])] = 1
+                    assert len(encoded_dict['input_ids']) == len(attn_mask)
+                    
+                    input_ids.append(encoded_dict['input_ids'])
+                    
+                    
+                    segment_ids.append([0] * len(encoded_dict['input_ids']))
+                    attention_masks.append(encoded_dict['attention_mask'])
+                    final_sentences.append(sentence_list[:3])
+
+                    if sentence_list[-1] == 'before':
+                        labels.append(0)
+                    elif sentence_list[-1] == 'after':
+                        labels.append(1)
+            
+        except AssertionError:
+            pass
+
+    return input_ids, attention_masks, segment_ids, labels, final_sentences
+
+
+def tokenize_and_mask(sentences):
+    """ We are using .encode_plus. This does not make specialized attn masks 
+        like in our selectional preferences experiment. Revert to .encode if
+        necessary."""
+    
+    input_ids = []
+    segment_ids = [] # token type ids
+    attention_masks = []
+    labels = []
+    final_sentences = []
+    
+    if 'flaubert' in args.transformer_model:
+        # Tokenize all of the sentences and map the tokens to their word IDs.
+        tok = FlaubertTokenizer.from_pretrained(args.transformer_model )
+    elif 'camembert' in args.transformer_model:
+        tok = CamembertTokenizer.from_pretrained(args.transformer_model)
+        
+    for sentence_list in sentences:
+        try:
+            noun = sentence_list[2]
+            adj = sentence_list[1]
+            
+            tok_noun = tok.encode(noun)
+            tok_adj = tok.encode(adj)
+            
+            if len(tok_noun) == 3 and len(tok_adj) == 3:
+                encoded_dict = tok.encode_plus(
+                                    sentence_list[0], # the sentence                  
+                                    add_special_tokens = True, # Add '[CLS]' and '[SEP]'
+                                    max_length = 128,      # Pad & truncate all sentences.
+                                    padding = 'max_length',
+                                    truncation = True,
+                                    return_attention_mask = True, # Construct attn. masks.
+                               )
+                if tok_noun[1] in encoded_dict['input_ids'] and \
+                    tok_adj[1] in encoded_dict['input_ids']:
+                    
                     attn_mask = [0] * len(encoded_dict['input_ids'])
                     attn_mask[encoded_dict['input_ids'].index(tok_noun[1])] = 1
                     attn_mask[encoded_dict['input_ids'].index(tok_adj[1])] = 1
@@ -267,12 +324,7 @@ def format_time(elapsed):
     return str(datetime.timedelta(seconds=elapsed_rounded))
 
     
-def decode_result(encoded_sequence):
-
-    if 'camembert' in args.transformer_model:
-        tok = CamembertTokenizer.from_pretrained(args.transformer_model )
-    elif 'flaubert' in args.transformer_model:
-        tok = FlaubertTokenizer.from_pretrained(args.transformer_model )
+def decode_result(encoded_sequence, tok):
     
     # decode + remove special tokens
     tokens_to_remove = ['[PAD]', '[SEP]', '[CLS]', '<pad>', '<sep>', '<s>', '</s>']

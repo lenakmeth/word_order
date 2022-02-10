@@ -133,4 +133,7 @@ dmypy.json
 *.out
 
 *.tsv # unless exlicitly added
-
+*.json
+*.sh
+*.ipynb
+data/

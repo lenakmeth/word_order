@@ -13,8 +13,8 @@ import time
 
 args = parse_args()
 
-# logger = open('logs/' + args.data_path + '/test_regular/' + args.transformer_model.split('/')[-1] + '.log', 'w')
-logger = open('logs/frwac/attn_mask/' + args.transformer_model.split('/')[-1] + '.log', 'w')
+logger = open('logs/' + args.data_path + '/' + args.transformer_model.split('/')[-1] + '.log', 'a+')
+
 logger.write('\nModel: ' + args.transformer_model)
 
 # if torch.cuda.is_available():      
@@ -30,19 +30,21 @@ epochs = args.num_epochs
 # read friedrich sentences, choose labels of telicity/duration
 train_sentences, train_labels, val_sentences, val_labels, \
     test_sentences, test_labels = read_sents('data/' + args.data_path)
+ud_test, ud_labels = open_file('data/ud', 'ud_sents.tsv')
 
 # make input ids, attention masks, segment ids, depending on the model we will use
 
-train_inputs, train_masks, train_segments, train_labels, train_sentences = tokenize_and_pad_with_attn(train_sentences)
-val_inputs, val_masks, val_segments, val_labels, val_sentences = tokenize_and_pad_with_attn(val_sentences)
-test_inputs, test_masks, test_segments, test_labels, test_sentences = tokenize_and_pad_with_attn(test_sentences)
+# train_inputs, train_masks, train_segments, train_labels, train_sentences = tokenize_and_pad_with_attn(train_sentences)
+# val_inputs, val_masks, val_segments, val_labels, val_sentences = tokenize_and_pad_with_attn(val_sentences)
+# test_inputs, test_masks, test_segments, test_labels, test_sentences = tokenize_and_pad_with_attn(test_sentences)
 
-# train_inputs, train_masks, train_segments, train_labels = tokenize_and_pad(train_sentences)
-# val_inputs, val_masks, val_segments, val_labels = tokenize_and_pad(val_sentences)
-# test_inputs, test_masks, test_segments, test_labels = tokenize_and_pad(test_sentences)
+train_inputs, train_masks, train_segments, train_labels = tokenize_and_pad(train_sentences)
+val_inputs, val_masks, val_segments, val_labels = tokenize_and_pad(val_sentences)
+test_inputs, test_masks, test_segments, test_labels = tokenize_and_pad(test_sentences)
+ud_inputs, ud_masks, ud_segments, ud_labels = tokenize_and_pad(ud_test)
 
 print('\n\nLoaded sentences and converted.')
-print('\nTrain set: ', len(train_inputs), len(train_masks), len(train_segments), len(train_labels))
+print('\nTrain set: ', len(train_inputs))
 print('\nValidation set: ' + str(len(val_inputs)))
 print('\nTest set: ' + str(len(test_inputs)))
 
@@ -52,20 +54,24 @@ logger.write('\nTest set: ' + str(len(test_inputs)))
 
 # Convert all inputs and labels into torch tensors, the required datatype for our model.
 train_inputs = torch.tensor(train_inputs)
-val_inputs = torch.tensor(val_inputs)
-test_inputs = torch.tensor(test_inputs)
-
 train_labels = torch.tensor(train_labels)
-val_labels = torch.tensor(val_labels)
-test_labels = torch.tensor(test_labels)
-
 train_segments = torch.tensor(train_segments)
-val_segments = torch.tensor(val_segments)
-test_segments = torch.tensor(test_segments)
-
 train_masks = torch.tensor(train_masks)
+
+val_inputs = torch.tensor(val_inputs)
+val_labels = torch.tensor(val_labels)
+val_segments = torch.tensor(val_segments)
 val_masks = torch.tensor(val_masks)
+
+test_inputs = torch.tensor(test_inputs)
+test_labels = torch.tensor(test_labels)
+test_segments = torch.tensor(test_segments)
 test_masks = torch.tensor(test_masks)
+
+ud_inputs = torch.tensor(ud_inputs)
+ud_labels = torch.tensor(ud_labels)
+ud_segments = torch.tensor(ud_segments)
+ud_masks = torch.tensor(ud_masks)
 
 # The DataLoader needs to know our batch size for training, so we specify it here.
 # For fine-tuning BERT on a specific task, the authors recommend a batch size of 16 or 32.
@@ -86,6 +92,11 @@ val_dataloader = DataLoader(val_data, sampler=val_sampler, batch_size=batch_size
 test_data = TensorDataset(test_inputs, test_masks, test_labels, test_segments)
 test_sampler = SequentialSampler(test_data)
 test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
+
+# Create the DataLoader for our UD set.
+ud_data = TensorDataset(ud_inputs, ud_masks, ud_labels, ud_segments)
+ud_sampler = SequentialSampler(ud_data)
+ud_dataloader = DataLoader(ud_data, sampler=ud_sampler, batch_size=batch_size)
 
 # Load BertForSequenceClassification, the pretrained BERT model with a single 
 # linear classification layer on top. 
@@ -315,6 +326,11 @@ for epoch_i in range(0, epochs):
 #output_model = 'checkpoints/' + args.label_marker + '/' + args.transformer_model + '_' + '4'  + '_' + args.verb_segment_ids
 #checkpoint = torch.load(output_model, map_location='cpu')
 
+if 'camembert' in args.transformer_model:
+    tok = CamembertTokenizer.from_pretrained(args.transformer_model )
+elif 'flaubert' in args.transformer_model:
+    tok = FlaubertTokenizer.from_pretrained(args.transformer_model )
+
 logger.write('\nLoaded model succesful. Running testing...')
 print('\ntest')
 
@@ -372,12 +388,88 @@ print(classification_report(all_labels, all_preds))
 logger.write('\n\nPredictions:')
 for n, sent in enumerate(all_inputs):
     if all_labels[n] != all_preds[n]:
-        sentence = decode_result(sent)
+        sentence = decode_result(sent, tok)
         logger.write('\nwrong_label: ' + str(all_preds[n]) + '\tprob: ' + str(all_probs[n])+ '\t')
         logger.write(sentence + '\t')
         logger.write('\t'.join(test_sentences[n]))
     else:
-        sentence = decode_result(sent)
+        sentence = decode_result(sent, tok)
         logger.write('\nright_label: ' + str(all_preds[n]) + '\tprob: ' + str(all_probs[n])+ '\t')
         logger.write(sentence + '\t')
         logger.write('\t'.join(test_sentences[n]))
+
+                
+# ========================================
+#               UNIVERSAL DEPENDENCIES
+# ========================================
+# Load the model of the last epoch
+
+#output_model = 'checkpoints/' + args.label_marker + '/' + args.transformer_model + '_' + '4'  + '_' + args.verb_segment_ids
+#checkpoint = torch.load(output_model, map_location='cpu')
+
+logger.write('\nUD TEST...')
+print('\nUNIVE DEPS')
+
+t0 = time.time()
+model.eval()
+ud_loss, ud_accuracy = 0, 0
+nb_ud_steps, nb_ud_examples = 0, 0
+
+all_inputs = []
+all_labels = []
+all_preds = []
+all_probs = []
+    
+for batch in ud_dataloader:
+    batch = tuple(t.to(device) for t in batch)
+    b_input_ids, b_input_mask, b_labels, b_segments = batch
+#     b_input_ids, b_input_mask, b_labels = batch
+#         
+    with torch.no_grad():        
+#         outputs = model(b_input_ids, 
+#                             token_type_ids=b_segments, 
+#                             attention_mask=b_input_mask
+#                            )
+         outputs = model(b_input_ids, 
+                            token_type_ids=None, 
+                            attention_mask=b_input_mask)
+
+    logits = outputs[0]
+    logits = logits.detach().cpu().numpy()
+    label_ids = b_labels.to('cpu').numpy()
+    log_probs = F.softmax(Variable(torch.from_numpy(logits)), dim=-1)
+    
+    
+    tmp_ud_accuracy = flat_accuracy(label_ids, logits)
+    ud_accuracy += tmp_ud_accuracy
+    nb_ud_steps += 1
+    
+    all_inputs += b_input_ids.to('cpu').numpy().tolist()
+    all_labels += label_ids.tolist()
+    all_preds += np.argmax(logits, axis=1).flatten().tolist()
+    all_probs += log_probs.tolist()
+    assert len(all_labels) == len(all_preds)
+
+# Report the accuracy, the sentences
+logger.write('\nAccuracy: {0:.2f}'.format(ud_accuracy/nb_ud_steps))
+logger.write('\nConfusion matrix:\n')
+logger.write(classification_report(all_labels, all_preds))
+
+print('\nAccuracy: {0:.2f}'.format(ud_accuracy/nb_ud_steps))
+print('\nConfusion matrix:\n')
+print(classification_report(all_labels, all_preds))
+
+# Uncomment the following to see the decoded sentences
+# change != to == to see the right predictions
+logger.write('\n\nPredictions:')
+for n, sent in enumerate(all_inputs):
+    if all_labels[n] != all_preds[n]:
+        sentence = decode_result(sent, tok)
+        logger.write('\nwrong_label: ' + str(all_preds[n]) + '\tprob: ' + str(all_probs[n])+ '\t')
+        logger.write(sentence + '\t')
+        logger.write('\t'.join(ud_test[n]))
+    else:
+        sentence = decode_result(sent, tok)
+        logger.write('\nright_label: ' + str(all_preds[n]) + '\tprob: ' + str(all_probs[n])+ '\t')
+        logger.write(sentence + '\t')
+        logger.write('\t'.join(ud_test[n]))
